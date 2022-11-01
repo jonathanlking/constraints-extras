@@ -7,6 +7,7 @@ module Data.Constraint.Extras.TH (deriveArgDict, deriveArgDictV, gadtIndices) wh
 
 import Data.Constraint
 import Data.Constraint.Extras
+import Data.Functor
 import Data.Maybe
 import Control.Monad
 import Language.Haskell.TH
@@ -15,8 +16,8 @@ deriveArgDict :: Name -> Q [Dec]
 deriveArgDict n = do
   (typeHead, constrs) <- getDeclInfo n
   c <- newName "c"
-  ts <- gadtIndices c constrs
-  let xs = flip map ts $ \case
+  let ts = gadtIndices c constrs
+      xs = flip map ts $ \case
         Left t -> AppT (AppT (ConT ''ConstraintsFor) t) (VarT c)
         Right t -> (AppT (VarT c) t)
       l = length xs
@@ -37,13 +38,9 @@ matches c constrs argDictName = do
     GadtC [name] _ _ -> return $
       [Match (RecP name []) (NormalB $ ConE 'Dict) []]
     ForallC _ _ (GadtC [name] bts (AppT _ (VarT b))) -> do
-      ps <- forM bts $ \case
-        (_, AppT t (VarT b')) | b == b' -> do
-          hasArgDictInstance <- not . null <$> reifyInstances ''ArgDict [VarT c, t]
-          return $ if hasArgDictInstance
-            then Just x
-            else Nothing
-        _ -> return Nothing
+      let ps = bts <&> \case
+            (_, AppT t (VarT b')) | b == b' -> Just x
+            _ -> Nothing
       return $ case catMaybes ps of
         [] -> [Match (RecP name []) (NormalB $ ConE 'Dict) []]
         (v:_) ->
@@ -105,13 +102,11 @@ getDeclInfo n = reify n >>= \case
       a -> error $ "getDeclInfo: Unmatched parent of data family instance: " ++ show a
   a -> error $ "getDeclInfo: Unmatched 'Info': " ++ show a
 
-gadtIndices :: Name -> [Con] -> Q [Either Type Type]
-gadtIndices c constrs = fmap concat $ forM constrs $ \case
-  GadtC _ _ (AppT _ typ) -> return [Right typ]
-  ForallC _ _ (GadtC _ bts (AppT _ (VarT _))) -> fmap concat $ forM bts $ \case
-    (_, AppT t (VarT _)) -> do
-      hasArgDictInstance <- fmap (not . null) $ reifyInstances ''ArgDict [VarT c, t]
-      return $ if hasArgDictInstance then [Left t] else []
-    _ -> return []
-  ForallC _ _ (GadtC _ _ (AppT _ typ)) -> return [Right typ]
-  _ -> return []
+gadtIndices :: Name -> [Con] -> [Either Type Type]
+gadtIndices c = concatMap $ \case
+  GadtC _ _ (AppT _ typ) -> [Right typ]
+  ForallC _ _ (GadtC _ bts (AppT _ (VarT _))) -> concat $ bts <&> \case
+    (_, AppT t (VarT _)) -> [Left t]
+    _ -> []
+  ForallC _ _ (GadtC _ _ (AppT _ typ)) -> [Right typ]
+  _ -> []
